@@ -1,4 +1,3 @@
-# Interview_qna_AWS
 # AWSInterviewQ&A
 
 This repository provides a comprehensive Q&A guide for preparing for AWS-related interview questions, focusing on designing highly available applications, networking, troubleshooting, cost optimization, and handling real-world AWS challenges. It is designed to help candidates articulate answers effectively in a DevOps or cloud engineering context.
@@ -23,7 +22,7 @@ To design a highly available and scalable multi-tier application in AWS, follow 
    - Use an Application Load Balancer (ALB) in public subnets to distribute traffic across AZs.
    - Configure a target group to route traffic to application instances.
 
-3. **Deploy Application in Ascending**:
+3. **Deploy Application in Private Subnets**:
    - Deploy EC2 instances or containers (e.g., ECS/EKS) in private subnets for security.
    - Use Auto Scaling Groups to ensure scalability based on metrics like CPU usage:
      ```yaml
@@ -495,5 +494,292 @@ If an Auto Scaling Group (ASG) fails to launch EC2 instances, several issues cou
   - Check CloudWatch metrics for ASG health and capacity issues.
   - Ensure the desired capacity is set correctly and health checks are configured properly.
 
+### 13. Which AWS services do you use in your day-to-day life?
+
+**Question**: Which AWS services do you use regularly, and how do they relate to a job description?
+
+**Answer**:
+The AWS services used daily depend on the job description, but common ones include:
+
+1. **VPC**: For creating isolated network environments with public and private subnets.
+2. **EC2**: For running virtual servers to host applications.
+3. **EKS**: For managing Kubernetes clusters to deploy containerized workloads.
+4. **ECR**: For storing and managing Docker container images.
+5. **S3**: For object storage, backups, and hosting static content.
+6. **RDS**: For managed relational databases (e.g., MySQL, PostgreSQL).
+7. **EBS**: For block storage attached to EC2 instances for persistent data.
+8. **CodePipeline**: For automating CI/CD pipelines.
+9. **CodeDeploy**: For deploying applications to EC2, Lambda, or ECS.
+
+- **Relevance to Job Description**:
+  - Review the job description to identify required services (e.g., EKS for Kubernetes roles, CodePipeline for CI/CD-focused roles).
+  - Example: For a DevOps role emphasizing CI/CD, highlight expertise in CodePipeline and CodeDeploy for automated deployments.
+  - Tailor the response to emphasize services relevant to the role, such as EKS for container orchestration or S3 for data storage solutions.
+
+### 14. Have you used AWS EFS? If yes, what issue did you run into?
+
+**Question**: Have you used AWS Elastic File System (EFS), and what challenges have you faced?
+
+**Answer**:
+AWS Elastic File System (EFS) is a serverless, scalable file storage system using the NFS protocol, ideal for shared storage across multiple EC2 instances or EKS pods.
+
+- **Use Case**: EFS is used when multiple instances or containers need concurrent read/write access to a shared file system, such as for application data or media processing.
+
+- **Issue Faced**:
+  - While working with a development team, an EFS mount was failing on one EC2 instance.
+  - **Troubleshooting Steps**:
+    1. Verified if EFS mount targets were available in all Availability Zones (AZs):
+       ```bash
+       aws efs describe-mount-targets --file-system-id <efs-id>
+       ```
+       Confirmed the mount target was missing in the instance’s AZ.
+    2. Checked the Security Group attached to the EFS mount target to ensure port 2049 (NFS) was allowed for inbound traffic:
+       ```json
+       {
+         "Type": "NFS",
+         "Protocol": "TCP",
+         "FromPort": 2049,
+         "ToPort": 2049,
+         "SourceSecurityGroupId": "<ec2-security-group-id>"
+       }
+       ```
+    3. Validated DNS resolution for the EFS endpoint (e.g., `<efs-id>.efs.<region>.amazonaws.com`).
+    4. Inspected the IAM role for the EFS access point, ensuring proper permissions:
+       ```json
+       {
+         "Effect": "Allow",
+         "Action": ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite"],
+         "Resource": "<efs-arn>"
+       }
+       ```
+    5. Identified the issue: The EFS access point was misconfigured. Updated the access point configuration:
+       ```bash
+       aws efs create-access-point --file-system-id <efs-id> --posix-user Uid=1000,Gid=1000 --root-directory Path=/data
+       ```
+
+- **Resolution**: Recreated the mount target in the correct AZ and updated the access point, resolving the mount failure.
+
+### 15. When would you choose EFS over EBS in real-time scenarios?
+
+**Question**: When would you use AWS EFS instead of EBS in real-world applications?
+
+**Answer**:
+AWS Elastic File System (EFS) and Elastic Block Store (EBS) serve different storage needs based on access patterns and performance requirements.
+
+- **EFS (Elastic File System)**:
+  - **Type**: Network file system (NFS) for shared storage.
+  - **Use Cases**:
+    - When multiple EC2 instances or EKS pods need concurrent read/write access to a shared file system.
+    - Examples:
+      - Shared data for EKS nodes (e.g., configuration files or logs).
+      - Media processing where multiple instances access the same mount point (e.g., image rendering).
+      - Content management systems requiring a common file system.
+    - Highly scalable, serverless, and automatically grows/shrinks with data.
+  - **Example**: Mount EFS in an EKS cluster to share data across pods:
+    ```yaml
+    volumeMounts:
+      - name: efs-storage
+        mountPath: /data
+    volumes:
+      - name: efs-storage
+        nfs:
+          server: <efs-id>.efs.<region>.amazonaws.com
+          path: /
+    ```
+
+- **EBS (Elastic Block Store)**:
+  - **Type**: Block storage dedicated to a single EC2 instance.
+  - **Use Cases**:
+    - When high-performance, low-latency storage is needed for a single instance.
+    - Examples:
+      - Databases (e.g., MySQL, PostgreSQL) requiring high throughput and IOPS.
+      - Applications needing dedicated storage with consistent performance.
+    - Not inherently shareable across multiple instances.
+  - **Example**: Attach an EBS volume to an EC2 instance for a database:
+    ```bash
+    aws ec2 attach-volume --volume-id <volume-id> --instance-id <instance-id> --device /dev/xvdf
+    ```
+
+- **Decision Criteria**:
+  - Choose **EFS** for shared, scalable storage across multiple instances or containers.
+  - Choose **EBS** for high-performance, dedicated block storage for a single instance.
+
+### 16. How do you disable AWS console access for IAM users?
+
+**Question**: How can you disable AWS Management Console access for IAM users?
+
+**Answer**:
+Disabling AWS Management Console access for IAM users ensures they can only interact with AWS via CLI, SDK, or API, enhancing security. This can be done via the AWS Console, CLI, or Infrastructure as Code (IaC) like Terraform.
+
+1. **Using AWS Console**:
+   - Navigate to IAM > Users in the AWS Management Console.
+   - Select the user, go to the **Security credentials** tab.
+   - Under **Console password**, click **Manage** and select **Disable**.
+   - Alternatively, delete the console password to prevent login.
+
+2. **Using Terraform**:
+   - Configure the IAM user without a console password or explicitly disable console access:
+     ```hcl
+     resource "aws_iam_user" "example" {
+       name = "example-user"
+     }
+     resource "aws_iam_user_login_profile" "example" {
+       user    = aws_iam_user.example.name
+       password_reset_required = false
+       # No password created, effectively disabling console access
+     }
+     ```
+   - To explicitly disable, avoid creating a `aws_iam_user_login_profile` resource.
+
+3. **Using AWS CLI**:
+   - Delete the user’s console password:
+     ```bash
+     aws iam delete-login-profile --user-name <user-name>
+     ```
+
+- **Additional Notes**:
+  - Ensure users have programmatic access keys if CLI/SDK access is needed.
+  - Use IAM policies to restrict console access further:
+    ```json
+    {
+      "Effect": "Deny",
+      "Action": "sts:GetSessionToken",
+      "Resource": "*",
+      "Condition": { "Bool": { "aws:ViaAWSService": "false" } }
+    }
+    ```
+
+### 17. How can an AWS Lambda function in one AWS account connect to an S3 bucket in another account?
+
+**Question**: How do you enable an AWS Lambda function in one AWS account to access an S3 bucket in another account?
+
+**Answer**:
+To allow a Lambda function in Account A to access an S3 bucket in Account B, configure cross-account permissions. The process is similar to same-account access, except for the account IDs in the ARNs.
+
+1. **Create or Update Lambda Function (Account A)**:
+   - Ensure the Lambda function exists:
+     ```bash
+     aws lambda create-function --function-name <function-name> --runtime python3.9 --role <execution-role-arn> --handler lambda_function.lambda_handler --zip-file fileb://function.zip
+     ```
+
+2. **Configure Lambda Execution Role (Account A)**:
+   - Attach an IAM policy to the Lambda’s execution role to allow access to the S3 bucket in Account B:
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Action": ["s3:GetObject", "s3:ListBucket"],
+           "Resource": [
+             "arn:aws:s3:::<bucket-name>",
+             "arn:aws:s3:::<bucket-name>/*"
+           ]
+         }
+       ]
+     }
+     ```
+   - Attach the policy:
+     ```bash
+     aws iam put-role-policy --role-name <lambda-role> --policy-name S3Access --policy-document file://s3-policy.json
+     ```
+
+3. **Update S3 Bucket Policy (Account B)**:
+   - Modify the S3 bucket policy to allow access from the Lambda function’s role in Account A:
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Principal": { "AWS": "arn:aws:iam::<account-a-id>:role/<lambda-role-name>" },
+           "Action": ["s3:GetObject", "s3:ListBucket"],
+           "Resource": [
+             "arn:aws:s3:::<bucket-name>",
+             "arn:aws:s3:::<bucket-name>/*"
+           ]
+         }
+       ]
+     }
+     ```
+   - Apply the policy:
+     ```bash
+     aws s3api put-bucket-policy --bucket <bucket-name> --policy file://bucket-policy.json
+     ```
+
+4. **Key Difference from Same-Account Access**:
+   - The only difference is the account ID in the Lambda role ARN (`arn:aws:iam::<account-a-id>:role/<role-name>` vs. same account).
+   - S3 bucket names are globally unique, so no naming conflicts arise.
+
+- **Additional Notes**:
+  - Ensure network connectivity (e.g., VPC endpoints if the Lambda is in a VPC).
+  - Test access:
+    ```python
+    import boto3
+    def lambda_handler(event, context):
+        s3 = boto3.client('s3')
+        response = s3.get_object(Bucket='<bucket-name>', Key='example.txt')
+        return response['Body'].read()
+    ```
+
+### 18. What is AWS STS, and why is it used?
+
+**Question**: Explain AWS Security Token Service (STS) and its use cases.
+
+**Answer**:
+AWS Security Token Service (STS) provides temporary security credentials for IAM roles or federated users to access AWS resources, enhancing security by limiting credential duration.
+
+- **Purpose**:
+  - Allows users or services to assume an IAM role and obtain temporary credentials (access key, secret key, session token) for specific actions.
+  - Credentials are valid for a defined period (e.g., 15 minutes to 12 hours).
+
+- **Use Case**:
+  - **Example**: A Lambda function needs temporary access to a DynamoDB table but lacks direct permissions.
+    - The Lambda assumes an IAM role with DynamoDB access using STS:
+      ```python
+      import boto3
+      def lambda_handler(event, context):
+          sts = boto3.client('sts')
+          assumed_role = sts.assume_role(
+              RoleArn='arn:aws:iam::<account-id>:role/DynamoDBAccessRole',
+              RoleSessionName='LambdaSession',
+              DurationSeconds=900  # 15 minutes
+          )
+          credentials = assumed_role['Credentials']
+          dynamodb = boto3.client(
+              'dynamodb',
+              aws_access_key_id=credentials['AccessKeyId'],
+              aws_secret_access_key=credentials['SecretAccessKey'],
+              aws_session_token=credentials['SessionToken']
+          )
+          response = dynamodb.get_item(TableName='MyTable', Key={'id': {'S': '123'}})
+          return response
+      ```
+    - The IAM role’s trust policy must allow the Lambda to assume it:
+      ```json
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Principal": { "Service": "lambda.amazonaws.com" },
+            "Action": "sts:AssumeRole"
+          }
+        ]
+      }
+      ```
+
+- **Why Used**:
+  - **Security**: Temporary credentials reduce the risk of long-lived keys.
+  - **Flexibility**: Enables cross-account access or role delegation (e.g., allowing a service in Account A to access resources in Account B).
+  - **Use Cases**:
+    - Cross-account resource access (e.g., Lambda accessing S3 in another account).
+    - Federated access for users via SAML or OIDC.
+    - Temporary permissions for CI/CD pipelines or scripts.
+
+- **Additional Notes**:
+  - Use Boto3’s `assume_role` method for programmatic access.
+  - Monitor STS usage via CloudTrail to detect unauthorized role assumptions.
+
 ## Conclusion
-Mastering AWS concepts like designing scalable applications, configuring networking, troubleshooting Lambda and EC2 issues, managing RDS storage, recovering deleted resources, and optimizing costs is essential for cloud engineering roles. These answers provide practical insights into building, securing, and maintaining enterprise-grade AWS environments, preparing candidates for real-world challenges.
+Mastering AWS concepts like designing scalable applications, configuring networking, troubleshooting Lambda and EC2 issues, managing storage, recovering resources, optimizing costs, and leveraging services like EFS, STS, and CI/CD tools is essential for cloud engineering roles. These answers provide practical insights into building, securing, and maintaining enterprise-grade AWS environments, preparing candidates for real-world challenges.
