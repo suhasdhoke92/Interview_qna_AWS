@@ -1,6 +1,6 @@
 # AWSInterviewQ&A
 
-This repository provides a comprehensive Q&A guide for preparing for AWS-related interview questions, focusing on designing highly available applications, networking, troubleshooting, cost optimization, and handling real-world AWS challenges. It is designed to help candidates articulate answers effectively in a DevOps or cloud engineering context.
+This repository provides a comprehensive Q&A guide for preparing for AWS-related interview questions, focusing on designing highly available applications, networking, troubleshooting, cost optimization, database management, and handling real-world AWS challenges. It is designed to help candidates articulate answers effectively in a DevOps or cloud engineering context.
 
 ## Q&A for AWS Interview
 
@@ -781,5 +781,412 @@ AWS Security Token Service (STS) provides temporary security credentials for IAM
   - Use Boto3’s `assume_role` method for programmatic access.
   - Monitor STS usage via CloudTrail to detect unauthorized role assumptions.
 
+### 19. What is a trust policy in AWS, and why is it used?
+
+**Question**: Explain what an AWS trust policy is and its purpose.
+
+**Answer**:
+An AWS trust policy is a JSON document attached to an IAM role that defines which principals (e.g., AWS services, IAM users, or accounts) can assume the role to perform actions on behalf of the role.
+
+- **Purpose**:
+  - Controls who or what can assume the IAM role to obtain temporary credentials via AWS Security Token Service (STS).
+  - Ensures only authorized entities can perform actions permitted by the role’s attached policies.
+
+- **Example**:
+  - An IAM role allows a Lambda function to fetch data from DynamoDB. The trust policy specifies that only the Lambda service can assume the role:
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": { "Service": "lambda.amazonaws.com" },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    }
+    ```
+  - The role’s permission policy allows DynamoDB access:
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": ["dynamodb:GetItem"],
+          "Resource": "arn:aws:dynamodb:<region>:<account-id>:table/MyTable"
+        }
+      ]
+    }
+    ```
+
+- **Why Used**:
+  - **Security**: Restricts role assumption to specific, trusted entities (e.g., a particular service or account).
+  - **Flexibility**: Enables cross-account access, service delegation, or federated access.
+  - **Example Use Case**: Allowing a Lambda function in Account A to assume a role in Account B for cross-account resource access.
+
+- **Additional Notes**:
+  - Trust policies are distinct from permission policies, which define what actions the role can perform.
+  - Use conditions (e.g., `aws:SourceAccount`) to further restrict role assumption.
+
+### 20. How does a Lambda function in AWS Account A interact with DynamoDB in Account B?
+
+**Question**: How can an AWS Lambda function in Account A access a DynamoDB table in Account B?
+
+**Answer**:
+To enable a Lambda function in Account A to access a DynamoDB table in Account B, use AWS STS to assume a role in Account B with DynamoDB permissions. Here’s the process:
+
+1. **In Account B: Create IAM Role**:
+   - Create an IAM role with permissions to access the DynamoDB table:
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Action": ["dynamodb:GetItem", "dynamodb:Query"],
+           "Resource": "arn:aws:dynamodb:<region>:<account-b-id>:table/MyTable"
+         }
+       ]
+     }
+     ```
+   - Attach the policy to the role:
+     ```bash
+     aws iam put-role-policy --role-name DynamoDBAccessRole --policy-name DynamoDBAccess --policy-document file://dynamodb-policy.json
+     ```
+
+2. **In Account B: Configure Trust Policy**:
+   - Update the IAM role’s trust policy to allow the Lambda function’s role in Account A to assume it:
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Principal": { "AWS": "arn:aws:iam::<account-a-id>:role/<lambda-role-name>" },
+           "Action": "sts:AssumeRole"
+         }
+       ]
+     }
+     ```
+   - Apply the trust policy:
+     ```bash
+     aws iam update-assume-role-policy --role-name DynamoDBAccessRole --policy-document file://trust-policy.json
+     ```
+
+3. **In Account A: Configure Lambda Execution Role**:
+   - Attach a policy to the Lambda’s execution role to allow assuming the role in Account B:
+     ```json
+     {
+       "Version": "2012-10-17",
+       "Statement": [
+         {
+           "Effect": "Allow",
+           "Action": "sts:AssumeRole",
+           "Resource": "arn:aws:iam::<account-b-id>:role/DynamoDBAccessRole"
+         }
+       ]
+     }
+     ```
+   - Attach the policy:
+     ```bash
+     aws iam put-role-policy --role-name <lambda-role> --policy-name STSAccess --policy-document file://sts-policy.json
+     ```
+
+4. **In Account A: Lambda Code with Boto3**:
+   - Use Boto3 to assume the role and access the DynamoDB table:
+     ```python
+     import boto3
+     def lambda_handler(event, context):
+         sts = boto3.client('sts')
+         assumed_role = sts.assume_role(
+             RoleArn='arn:aws:iam::<account-b-id>:role/DynamoDBAccessRole',
+             RoleSessionName='LambdaSession',
+             DurationSeconds=900  # 15 minutes
+         )
+         credentials = assumed_role['Credentials']
+         dynamodb = boto3.client(
+             'dynamodb',
+             aws_access_key_id=credentials['AccessKeyId'],
+             aws_secret_access_key=credentials['SecretAccessKey'],
+             aws_session_token=credentials['SessionToken'],
+             region_name='<region>'
+         )
+         response = dynamodb.get_item(TableName='MyTable', Key={'id': {'S': '123'}})
+         return response
+     ```
+
+- **Additional Notes**:
+  - Ensure network connectivity (e.g., VPC endpoints if the Lambda is in a VPC).
+  - Test the Lambda function to verify cross-account access.
+  - Monitor STS role assumptions via CloudTrail.
+
+### 21. What are the disadvantages of using EBS volumes, and when would you choose EFS over EBS?
+
+**Question**: What are the disadvantages of EBS volumes, and when is EFS preferred over EBS?
+
+**Answer**:
+AWS Elastic Block Store (EBS) and Elastic File System (EFS) serve different storage needs. EBS has specific limitations that make EFS preferable in certain scenarios.
+
+- **Disadvantages of EBS**:
+  1. **Tied to a Single Availability Zone**:
+     - EBS volumes are bound to a specific AZ, which complicates scenarios like Kubernetes pod rescheduling.
+     - Example: In a Kubernetes cluster with nodes in different AZs (e.g., us-east-1a and us-east-1b), if a pod using an EBS volume is rescheduled to a node in a different AZ, it cannot access the volume, causing failures.
+  2. **Single-Instance Attachment**:
+     - EBS volumes can only be attached to one EC2 instance at a time (except for multi-attach in specific cases, which is limited).
+     - Example: For a database application with two pods needing shared access to the same data (e.g., a shared volume for data consistency), EBS cannot support concurrent access.
+
+- **When to Choose EFS Over EBS**:
+  - **Shared Storage Needs**:
+    - Use EFS when multiple EC2 instances or Kubernetes pods require concurrent read/write access to a shared file system.
+    - Example: In an EKS cluster, multiple pods (e.g., for a content management system) need to access a common file system for shared data:
+      ```yaml
+      volumeMounts:
+        - name: efs-storage
+          mountPath: /data
+      volumes:
+        - name: efs-storage
+          nfs:
+            server: <efs-id>.efs.<region>.amazonaws.com
+            path: /
+      ```
+  - **Scalability**: EFS is serverless and automatically scales, unlike EBS, which requires manual resizing.
+  - **Use Cases**:
+    - Shared configuration files or logs across EKS nodes.
+    - Media processing where multiple instances access the same mount point.
+    - Applications requiring a common file system for distributed workloads.
+
+- **EBS Use Cases**:
+  - Choose EBS for high-performance, low-latency block storage for a single instance, such as databases (e.g., MySQL, PostgreSQL) requiring high IOPS.
+  - Example: Attach an EBS volume for a database:
+    ```bash
+    aws ec2 attach-volume --volume-id <volume-id> --instance-id <instance-id> --device /dev/xvdf
+    ```
+
+- **Decision Criteria**:
+  - Use **EFS** for shared, scalable storage across multiple instances or containers.
+  - Use **EBS** for dedicated, high-performance storage for a single instance.
+
+### 22. AWS Secrets Manager vs. Systems Manager Parameter Store: Which to use?
+
+**Question**: Compare AWS Secrets Manager and Systems Manager Parameter Store, and when would you use each?
+
+**Answer**:
+AWS Secrets Manager and Systems Manager Parameter Store both store configuration data and sensitive information, but they differ in features and use cases.
+
+- **AWS Secrets Manager**:
+  - **Purpose**: Designed for managing sensitive data like database credentials, API keys, and passwords.
+  - **Features**:
+    - Automatic secret rotation (e.g., for RDS credentials) using Lambda functions.
+    - Cross-account access support.
+    - Fine-grained access control via IAM policies.
+    - Encryption at rest using AWS KMS.
+  - **Use Case**:
+    - Storing highly sensitive data requiring automatic rotation or cross-account sharing.
+    - Example: Store and rotate RDS credentials:
+      ```bash
+      aws secretsmanager create-secret --name MyDBCredentials --secret-string '{"username":"admin","password":"securepassword"}'
+      ```
+  - **Cost**: Higher cost per secret and API call compared to Parameter Store.
+
+- **Systems Manager Parameter Store**:
+  - **Purpose**: General-purpose storage for configuration data and secrets (e.g., API keys, strings, or configuration values).
+  - **Features**:
+    - Supports secure strings (encrypted with KMS).
+    - No automatic rotation (manual implementation required).
+    - Basic access control via IAM.
+    - Lower cost, with a free tier for standard parameters.
+  - **Use Case**:
+    - Storing less sensitive configuration data or secrets where rotation is not critical.
+    - Example: Store an API key:
+      ```bash
+      aws ssm put-parameter --name MyAPIKey --value "my-key" --type SecureString
+      ```
+  - **Cost**: Lower cost, suitable for non-critical secrets.
+
+- **Decision Criteria**:
+  - Use **Secrets Manager** for highly secure secrets requiring automatic rotation or cross-account access (e.g., database credentials).
+  - Use **Parameter Store** for basic secret storage or configuration data with minimal security requirements (e.g., non-sensitive API keys).
+
+- **Example**:
+  - For a microservice needing RDS credentials with automatic rotation, use Secrets Manager.
+  - For storing a static API key used by a Lambda function, use Parameter Store to save costs.
+
+### 23. Explain your day-to-day activities related to database management in AWS?
+
+**Question**: What are your daily responsibilities related to database management in AWS?
+
+**Answer**:
+As a DevOps or cloud engineer, my day-to-day database-related activities in AWS include:
+
+1. **Provisioning Databases**:
+   - Use Infrastructure as Code (IaC) like Terraform to provision RDS instances (e.g., MySQL, PostgreSQL):
+     ```hcl
+     resource "aws_db_instance" "example" {
+       engine            = "mysql"
+       instance_class    = "db.t3.micro"
+       allocated_storage = 20
+       username          = "admin"
+       password          = "securepassword"
+       multi_az          = true
+     }
+     ```
+
+2. **Monitoring**:
+   - Monitor CPU, memory, latency, and concurrent connections using CloudWatch:
+     ```bash
+     aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name CPUUtilization --dimensions Name=DBInstanceIdentifier,Value=<db-id>
+     ```
+   - Set up alarms for anomalies (e.g., high CPU usage).
+
+3. **Backups**:
+   - Configure automated backups and take manual snapshots:
+     ```bash
+     aws rds create-db-snapshot --db-instance-identifier <db-id> --db-snapshot-identifier <snapshot-id>
+     ```
+   - Ensure EBS volumes for RDS are backed up if custom configurations are used.
+
+4. **Security**:
+   - Assign appropriate IAM roles to RDS instances for secure access:
+     ```json
+     {
+       "Effect": "Allow",
+       "Action": ["rds-db:connect"],
+       "Resource": "arn:aws:rds-db:<region>:<account-id>:dbuser:<db-id>/app-user"
+     }
+     ```
+   - Revoke database access for employees who leave the organization:
+     ```bash
+     aws rds delete-db-instance --db-instance-identifier <db-id> --skip-final-snapshot
+     ```
+
+5. **Disaster Recovery (DR)**:
+   - Implement Multi-AZ deployments for failover:
+     ```bash
+     aws rds modify-db-instance --db-instance-identifier <db-id> --multi-az
+     ```
+   - Set up cross-region replication for DR using read replicas:
+     ```bash
+     aws rds create-db-instance-read-replica --db-instance-identifier <replica-id> --source-db-instance-identifier <source-db-arn> --region <dr-region>
+     ```
+
+- **Additional Notes**:
+  - Collaborate with DBAs to optimize queries and schemas.
+  - Use AWS Secrets Manager for secure credential management.
+
+### 24. Have you worked with Lambda in AWS?
+
+**Question**: Have you used AWS Lambda, and what tasks have you performed with it?
+
+**Answer**:
+Yes, I have strong experience using AWS Lambda for automation, cost optimization, and compliance enforcement.
+
+- **Use Cases**:
+  1. **Cost Optimization**:
+     - Developed a Lambda function to identify and delete unattached EBS volumes:
+       ```python
+       import boto3
+       def lambda_handler(event, context):
+           ec2 = boto3.client('ec2')
+           volumes = ec2.describe_volumes(Filters=[{'Name': 'status', 'Values': ['available']}])
+           for vol in volumes['Volumes']:
+               ec2.delete_volume(VolumeId=vol['VolumeId'])
+       ```
+     - Scheduled it via EventBridge to run monthly.
+  2. **SNS Notifications**:
+     - Created a Lambda function triggered by SNS to send reminders to developers for actions like cleaning up unused resources:
+       ```python
+       import boto3
+       def lambda_handler(event, context):
+           sns = boto3.client('sns')
+           sns.publish(TopicArn='<sns-topic-arn>', Message='Reminder: Clean up unused AMIs')
+       ```
+  3. **Compliance Enforcement**:
+     - Built a Lambda function to identify resources (e.g., EC2, S3) without required tags:
+       ```python
+       import boto3
+       def lambda_handler(event, context):
+           ec2 = boto3.client('ec2')
+           instances = ec2.describe_instances()
+           for reservation in instances['Reservations']:
+               for instance in reservation['Instances']:
+                   if not instance.get('Tags'):
+                       boto3.client('sns').publish(
+                           TopicArn='<sns-topic-arn>',
+                           Message=f'Instance {instance["InstanceId"]} lacks tags'
+                       )
+       ```
+     - Notified teams via SNS to tag resources for compliance.
+
+  4. **Stale Resource Cleanup**:
+     - Automated deletion of unused AMIs and snapshots:
+       ```python
+       import boto3
+       def lambda_handler(event, context):
+           ec2 = boto3.client('ec2')
+           snapshots = ec2.describe_snapshots(OwnerIds=['self'])
+           for snap in snapshots['Snapshots']:
+               if snap['StartTime'].date() < datetime.date.today() - datetime.timedelta(days=90):
+                   ec2.delete_snapshot(SnapshotId=snap['SnapshotId'])
+       ```
+
+- **Additional Notes**:
+  - Use Lambda with CloudWatch Logs for debugging.
+  - Optimize Lambda performance by adjusting memory and timeout settings.
+
+### 25. What is the difference between an IAM user and an IAM role?
+
+**Question**: Explain the difference between an IAM user and an IAM role in AWS.
+
+**Answer**:
+AWS Identity and Access Management (IAM) provides authentication and authorization for AWS resources. IAM users and roles serve different purposes based on access duration and use case.
+
+- **IAM User**:
+  - **Definition**: Represents a person or application with long-term credentials (access key, secret key, or console password).
+  - **Use Case**: Suitable for individuals or services requiring persistent access to AWS resources.
+  - **Example**:
+    - A developer with an IAM user account to access the AWS Console or CLI:
+      ```bash
+      aws s3 ls --profile my-user
+      ```
+    - Permissions are defined via IAM policies:
+      ```json
+      {
+        "Effect": "Allow",
+        "Action": "s3:ListBucket",
+        "Resource": "arn:aws:s3:::my-bucket"
+      }
+      ```
+
+- **IAM Role**:
+  - **Definition**: A temporary identity that can be assumed by users, services, or applications via AWS STS for short-term access.
+  - **Use Case**: Ideal for temporary access, cross-account access, or service delegation.
+  - **Example**:
+    - A Lambda function assumes a role to access S3:
+      ```json
+      {
+        "Effect": "Allow",
+        "Principal": { "Service": "lambda.amazonaws.com" },
+        "Action": "sts:AssumeRole"
+      }
+      ```
+    - The role’s permissions allow S3 access:
+      ```json
+      {
+        "Effect": "Allow",
+        "Action": "s3:GetObject",
+        "Resource": "arn:aws:s3:::my-bucket/*"
+      }
+      ```
+
+- **Key Differences**:
+  - **Duration**: IAM users have long-term credentials; roles provide temporary credentials via STS.
+  - **Attachment**: Users are standalone identities; roles are assumed by users, services (e.g., Lambda, EC2), or applications.
+  - **Use Case**: Use IAM users for persistent access (e.g., developers); use roles for temporary or service-based access (e.g., Lambda accessing DynamoDB).
+
+- **Additional Notes**:
+  - Roles enhance security by avoiding long-lived credentials.
+  - Use roles for cross-account access or federated users (e.g., via SAML).
+
 ## Conclusion
-Mastering AWS concepts like designing scalable applications, configuring networking, troubleshooting Lambda and EC2 issues, managing storage, recovering resources, optimizing costs, and leveraging services like EFS, STS, and CI/CD tools is essential for cloud engineering roles. These answers provide practical insights into building, securing, and maintaining enterprise-grade AWS environments, preparing candidates for real-world challenges.
+Mastering AWS concepts like designing scalable applications, configuring networking, troubleshooting Lambda and EC2 issues, managing storage and databases, optimizing costs, and leveraging services like EFS, STS, IAM, and Secrets Manager is essential for cloud engineering roles. These answers provide practical insights into building, securing, and maintaining enterprise-grade AWS environments, preparing candidates for real-world challenges.
